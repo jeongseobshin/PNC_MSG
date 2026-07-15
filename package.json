@@ -1,0 +1,15 @@
+{
+  "name": "teamhub",
+  "private": true,
+  "version": "1.0.0",
+  "description": "사내 메신저 — 정적 프론트 + Netlify Functions + Supabase",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "vapid": "web-push generate-vapid-keys",
+    "dev": "netlify dev"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}

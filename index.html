@@ -19,9 +19,11 @@
 <script src="assets/js/store.js"></script>
 <script src="assets/js/ui.js"></script>
 <script src="assets/js/docs.js"></script>
+<script src="assets/js/push.js"></script>
 <script src="assets/js/app.js"></script>
 <script>
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  // 서비스 워커: 오프라인 셸 + 푸시 수신. localhost에서도 등록됩니다.
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 </script>

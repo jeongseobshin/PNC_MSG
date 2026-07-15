@@ -196,30 +196,75 @@ const Store = (() => {
     },
 
     /* ---- 메시지 ---- */
-    async messages(target) {
+    /** 최상위 메시지만 (답글은 thread()로). before가 있으면 그보다 이전 것을 가져옵니다. */
+    async messages(target, { before = null, limit = 50 } = {}) {
       if (!useSupabase) {
-        const rows = target.kind === 'dm'
+        let rows = (target.kind === 'dm'
           ? demo.dm_messages.filter((m) => m.dm_id === target.id)
-          : demo.messages.filter((m) => m.channel_id === target.id);
-        return [...rows].sort((a, b) => a.created_at.localeCompare(b.created_at));
+          : demo.messages.filter((m) => m.channel_id === target.id))
+          .filter((m) => !m.parent_id);
+        rows = rows.sort((a, b) => a.created_at.localeCompare(b.created_at));
+        if (before) rows = rows.filter((m) => m.created_at < before);
+        const page = rows.slice(-limit);
+        return { rows: page, more: page.length < rows.length };
       }
-      const q = sb.from('messages').select('*').order('created_at');
-      const { data, error } = target.kind === 'dm' ? await q.eq('dm_id', target.id) : await q.eq('channel_id', target.id);
+      let q = sb.from('messages').select('*').is('parent_id', null)
+        .order('created_at', { ascending: false }).limit(limit + 1);
+      q = target.kind === 'dm' ? q.eq('dm_id', target.id) : q.eq('channel_id', target.id);
+      if (before) q = q.lt('created_at', before);
+      const { data, error } = await q;
+      if (error) throw error;
+      const more = data.length > limit;
+      const rows = (more ? data.slice(0, limit) : data).reverse()
+        .map((m) => ({ ...m, reactions: m.reactions || {} }));
+      return { rows, more };
+    },
+
+    /** 스레드의 답글 목록 */
+    async thread(parentId) {
+      if (!useSupabase) {
+        return [...demo.messages, ...demo.dm_messages]
+          .filter((m) => m.parent_id === parentId)
+          .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      }
+      const { data, error } = await sb.from('messages').select('*').eq('parent_id', parentId).order('created_at');
       if (error) throw error;
       return (data || []).map((m) => ({ ...m, reactions: m.reactions || {} }));
     },
 
-    async send(target, { body, importance = 'normal', file = null, poll = null }) {
+    async message(id) {
+      if (!useSupabase) return [...demo.messages, ...demo.dm_messages].find((m) => m.id === id) || null;
+      const { data } = await sb.from('messages').select('*').eq('id', id).maybeSingle();
+      return data ? { ...data, reactions: data.reactions || {} } : null;
+    },
+
+    /** 본문에서 @이름을 찾아 실제 사용자 id로 바꿔 둡니다. 푸시 대상 선별에 씁니다. */
+    parseMentions(body) {
+      const ids = [];
+      for (const p of api.cache.profiles) {
+        if (p.status !== 'active') continue;
+        if (body.includes('@' + p.full_name) && p.id !== api.me.id) ids.push(p.id);
+      }
+      return { mentions: ids, mention_all: body.includes('@채널') || body.includes('@전체') };
+    },
+
+    async send(target, { body, importance = 'normal', file = null, poll = null, parent_id = null }) {
+      const { mentions, mention_all } = api.parseMentions(body);
       const row = {
         id: uid(), user_id: api.me.id, body, importance, created_at: now(), reactions: {},
+        mentions, mention_all, parent_id, reply_count: 0,
         ...(file ? { file } : {}), ...(poll ? { poll } : {}),
         ...(target.kind === 'dm' ? { dm_id: target.id } : { channel_id: target.id }),
       };
       if (!useSupabase) {
         (target.kind === 'dm' ? demo.dm_messages : demo.messages).push(row);
+        if (parent_id) {
+          const parent = [...demo.messages, ...demo.dm_messages].find((m) => m.id === parent_id);
+          if (parent) parent.reply_count = (parent.reply_count || 0) + 1;
+        }
         emit(); return row;
       }
-      const { id, ...ins } = row;
+      const { id, reply_count, ...ins } = row;
       const { data, error } = await sb.from('messages').insert(ins).select().single();
       if (error) throw error;
       return data;
@@ -468,6 +513,43 @@ const Store = (() => {
         { onConflict: 'user_id,target_id' });
     },
 
+    /** 이 대화를 사람들이 어디까지 읽었는지 */
+    async targetReads(targetId) {
+      if (!useSupabase) {
+        return Object.entries(demo.reads)
+          .filter(([k]) => k === targetId)
+          .map(([, at]) => ({ user_id: api.me.id, read_at: at }));
+      }
+      const { data } = await sb.from('reads').select('user_id,read_at').eq('target_id', targetId);
+      return data || [];
+    },
+
+    subscribeReads(targetId, cb) {
+      if (!useSupabase) return { unsubscribe() {} };
+      const ch = sb.channel(`reads:${targetId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'reads', filter: `target_id=eq.${targetId}` }, cb)
+        .subscribe();
+      return { unsubscribe: () => sb.removeChannel(ch) };
+    },
+
+    /* ---- 푸시 구독 ---- */
+    async savePushSubscription(sub) {
+      if (!useSupabase) return;
+      await sb.from('push_subscriptions').upsert({
+        user_id: api.me.id,
+        endpoint: sub.endpoint,
+        p256dh: sub.keys.p256dh,
+        auth: sub.keys.auth,
+        ua: navigator.userAgent.slice(0, 200),
+        last_ok_at: now(),
+      }, { onConflict: 'endpoint' });
+    },
+
+    async deletePushSubscription(endpoint) {
+      if (!useSupabase) return;
+      await sb.from('push_subscriptions').delete().eq('endpoint', endpoint);
+    },
+
     /* 사이드바 배지용. 최근 활동만 한 번에 가져와 클라이언트에서 셉니다. */
     async recentActivity() {
       if (!useSupabase) {
@@ -475,7 +557,7 @@ const Store = (() => {
           .map((m) => ({ target: m.channel_id || m.dm_id, created_at: m.created_at, user_id: m.user_id, body: m.body, importance: m.importance }));
       }
       const { data } = await sb.from('messages')
-        .select('channel_id,dm_id,created_at,user_id,body,importance')
+        .select('channel_id,dm_id,created_at,user_id,body,importance,mentions,mention_all')
         .order('created_at', { ascending: false }).limit(400);
       return (data || []).map((m) => ({ target: m.channel_id || m.dm_id, ...m }));
     },
@@ -491,7 +573,8 @@ const Store = (() => {
         if (since && a.created_at <= since) continue;
         const o = out[a.target] || (out[a.target] = { count: 0, mention: false });
         o.count++;
-        if (a.body?.includes('@' + myName) || a.body?.includes('@채널') || a.importance === 'urgent') o.mention = true;
+        const hit = a.mentions ? a.mentions.includes(api.me.id) : a.body?.includes('@' + myName);
+        if (hit || a.mention_all || a.body?.includes('@채널') || a.importance === 'urgent') o.mention = true;
       }
       return out;
     },

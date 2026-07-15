@@ -18,6 +18,9 @@ const App = (() => {
     target: null,
     openTeams: {},
     messages: [],
+    more: false,
+    reads: [],
+    thread: null,      // 열려 있는 스레드의 부모 메시지 id
     drafts: {},
     flags: {},
     unread: {},
@@ -30,6 +33,7 @@ const App = (() => {
     lastRead: null,
     sub: null,
     typingCh: null,
+    readsCh: null,
   };
 
   /* ================= 테마 ================= */
@@ -251,22 +255,45 @@ const App = (() => {
 
   const presenceOf = (id) => S.online.has(id) ? 'online' : (Store.profile(id).presence === 'away' ? 'away' : 'offline');
 
+  async function loadMessages() {
+    const { rows, more } = await Store.messages(S.target);
+    S.messages = rows; S.more = more;
+  }
+
+  async function loadOlder() {
+    if (!S.messages.length) return;
+    const stream = root.querySelector('#stream');
+    const keepH = stream.scrollHeight, keepT = stream.scrollTop;
+    const { rows, more } = await Store.messages(S.target, { before: S.messages[0].created_at });
+    S.messages = [...rows, ...S.messages]; S.more = more;
+    paintStream(false);
+    // 읽던 위치가 튀지 않게 늘어난 높이만큼 스크롤을 내려 줍니다.
+    stream.scrollTop = keepT + (stream.scrollHeight - keepH);
+  }
+
   /* ================= 대화 열기 ================= */
   async function open(target) {
     if (S.target?.id === target.id && S.view === 'chat') { if (isMobile()) { S.pane = 'main'; layout(); } return; }
-    S.sub?.unsubscribe(); S.typingCh?.unsubscribe();
+    S.sub?.unsubscribe(); S.typingCh?.unsubscribe(); S.readsCh?.unsubscribe();
     S.lastRead = Store.reads[target.id] || null;
     S.target = target;
     if (['search', 'admin'].includes(S.view)) S.view = 'chat';
-    S.pane = 'main'; S.panel = false; S.typers.clear();
-    S.messages = [];
+    S.pane = 'main'; S.panel = false; S.thread = null; S.typers.clear();
+    S.messages = []; S.reads = [];
     paintRail(); paintSidebar(); paintMain(); layout();
 
-    S.messages = await Store.messages(target);
+    await loadMessages();
     if (S.target?.id !== target.id) return;
     paintStream(true);
+    S.reads = await Store.targetReads(target.id);
+    paintStream(false);
+
     S.sub = Store.subscribe(target, onRemote);
     S.typingCh = Store.typingChannel(target.id, onTyping);
+    S.readsCh = Store.subscribeReads(target.id, async () => {
+      S.reads = await Store.targetReads(target.id);
+      paintStream(false);
+    });
     await markRead();
   }
 
@@ -278,14 +305,15 @@ const App = (() => {
   }
 
   async function onRemote() {
-    const before = S.messages.length;
-    S.messages = await Store.messages(S.target);
-    const fresh = S.messages.slice(before);
+    const known = new Set(S.messages.map((m) => m.id));
+    await loadMessages();
+    const fresh = S.messages.filter((m) => !known.has(m.id) && !m.id.startsWith?.('tmp_'));
     paintStream(S.atBottom);
     for (const m of fresh) {
       if (m.user_id === Store.me.id) continue;
       notify(m);
     }
+    if (S.thread) renderThread();
     if (S.atBottom && !document.hidden) markRead();
     refreshUnread();
   }
@@ -309,11 +337,45 @@ const App = (() => {
       body: m.body.slice(0, 120), icon: 'assets/icon-192.png', tag: m.id,
     });
   }
-  function askNotify() {
-    if (typeof Notification === 'undefined' || Notification.permission !== 'default') return;
+  async function askNotify() {
+    const st = await Push.state();
+    if (st !== 'off' || store.get('pushAsked') === '1') return;
     setTimeout(() => {
-      toastAction('@멘션과 긴급 메시지를 알림으로 받을까요?', '허용', () => Notification.requestPermission());
-    }, 4000);
+      toastAction('@멘션·긴급·다이렉트 메시지를 알림으로 받을까요?', '켜기', async () => {
+        store.set('pushAsked', '1');
+        try { await Push.enable(); toast('알림을 켰습니다. 앱을 닫아도 옵니다.'); }
+        catch (e) { toast(e.message); }
+      });
+    }, 5000);
+  }
+
+  /** 알림 설정 화면 */
+  async function pushSettings() {
+    const st = await Push.state();
+    const label = {
+      on: '켜져 있습니다', off: '꺼져 있습니다', denied: '브라우저에서 차단됨',
+      unsupported: '이 브라우저는 지원하지 않습니다',
+      'ios-install': 'iPhone은 홈 화면에 추가한 뒤 켤 수 있습니다',
+      unconfigured: '관리자가 푸시 키를 설정하지 않았습니다',
+    }[st];
+    const can = st === 'on' || st === 'off';
+    const r = await modal({
+      title: '알림 설정',
+      submit: st === 'on' ? '끄기' : can ? '켜기' : '닫기',
+      html: `
+        <p style="margin:0 0 12px">상태: <b>${esc(label)}</b></p>
+        <div class="notice notice-info" style="margin:0">
+          받는 알림 — 다이렉트 메시지 · @내 이름 · @채널 · 긴급 메시지.<br/>
+          일반 채널 대화는 알리지 않습니다.
+        </div>
+        ${st === 'denied' ? '<p class="field-hint">주소창 왼쪽 자물쇠 → 알림 → 허용으로 바꾼 뒤 새로고침하세요.</p>' : ''}
+        ${st === 'ios-install' ? '<p class="field-hint">사파리 공유 버튼 → 홈 화면에 추가 → 그 아이콘으로 열어 주세요.</p>' : ''}`,
+    });
+    if (r === null || !can) return;
+    try {
+      if (st === 'on') { await Push.disable(); toast('알림을 껐습니다.'); }
+      else { await Push.enable(); toast('알림을 켰습니다.'); }
+    } catch (e) { toast(e.message); }
   }
   function toastAction(text, label, fn) {
     let wrap = document.querySelector('.toast-wrap');
@@ -374,7 +436,7 @@ const App = (() => {
       <div id="pane" style="flex:1;display:flex;flex-direction:column;min-height:0"></div>`;
 
     main.querySelector('[data-back]').onclick = () => { S.pane = 'sidebar'; layout(); };
-    main.querySelector('[data-panel]').onclick = togglePanel;
+    main.querySelector('[data-panel]').onclick = () => togglePanel();
     main.querySelectorAll('[data-tab]').forEach((b) => b.onclick = () => { S.view = b.dataset.tab; paintRail(); paintMain(); });
 
     const pane = main.querySelector('#pane');
@@ -400,8 +462,15 @@ const App = (() => {
       : Store.cache.channel_members.filter((m) => m.channel_id === t.id).map((m) => Store.profile(m.user_id));
   }
 
-  const togglePanel = () => {
-    S.panel = !S.panel;
+  function openThread(id) {
+    S.thread = id;
+    if (!S.panel) togglePanel(true);
+    else { S.pane = 'panel'; renderPanel(); layout(); }
+  }
+
+  const togglePanel = (open = null) => {
+    S.panel = open === null ? !S.panel : open;
+    if (!S.panel) S.thread = null;
     const old = root.querySelector('#panel'); old?.remove();
     if (S.panel) {
       const p = document.createElement('aside');
@@ -517,7 +586,7 @@ const App = (() => {
       S.atBottom = true; paintStream(true);
       try {
         await Store.send(S.target, { body, importance: flag });
-        S.messages = await Store.messages(S.target);
+        await loadMessages();
         paintStream(true);
         if (flag === 'urgent') toast('긴급 메시지를 보냈습니다. 읽을 때까지 알림이 반복됩니다.');
       } catch (err) {
@@ -536,7 +605,7 @@ const App = (() => {
       try {
         if (S.target.kind === 'channel') await Store.upload(S.target.id, f);
         await Store.send(S.target, { body: `파일을 공유했습니다: ${f.name}`, file: { name: f.name, size: f.size } });
-        S.messages = await Store.messages(S.target); paintStream(true);
+        await loadMessages(); paintStream(true);
         toast(`${f.name} 올렸습니다.`);
       } catch (err) {
         S.messages = S.messages.filter((m) => m !== tmp); paintStream(false);
@@ -551,7 +620,7 @@ const App = (() => {
         fields: [{ name: 'body', label: '내용', type: 'textarea', value: mine.body, required: true }] });
       if (!r) return;
       await Store.editMessage(mine, r.body);
-      S.messages = await Store.messages(S.target); paintStream(false);
+      await loadMessages(); paintStream(false);
     }
 
     paintStream(true);
@@ -569,6 +638,9 @@ const App = (() => {
       stream.innerHTML = `<div class="empty"><b>첫 메시지를 남겨보세요</b><span>이 대화는 아직 비어 있습니다.</span></div>`;
       return;
     }
+
+    // 내가 보낸 마지막 메시지에만 읽음 표시를 답니다. 전부 달면 지저분해집니다.
+    const lastMine = [...S.messages].reverse().find((m) => m.user_id === Store.me.id && !m.pending);
 
     const meName = Store.me.full_name;
     let lastUser = null, lastDay = null, newShown = false;
@@ -599,6 +671,12 @@ const App = (() => {
             <span class="file-meta">${size(m.file.size)} · 눌러서 열기</span></span>
         </button>` : '';
 
+      const replies = m.reply_count > 0 ? `
+        <button class="thread-link" data-thread="${m.id}">
+          💬 답글 ${m.reply_count}개<span class="thread-open">스레드 열기</span>
+        </button>` : '';
+      const receipt = (lastMine && m.id === lastMine.id) ? readReceipt(m) : '';
+
       return `${pre}
         <div class="${cls}" data-msg="${m.id}">
           ${avatar(p)}
@@ -611,13 +689,21 @@ const App = (() => {
               ${m.failed ? '<span class="msg-edited" style="color:var(--urgent)">보내지 못함</span>' : ''}</div>
             ${fileCard}${m.poll ? renderPoll(m) : ''}
             ${reactions ? `<div class="reactions">${reactions}</div>` : ''}
+            ${replies}${receipt}
           </div>
           ${m.pending ? '' : `<div class="msg-tools">
             ${['👍', '🎉', '👀', '❤️'].map((e) => `<button data-react="${m.id}" data-emoji="${e}" title="${e}">${e}</button>`).join('')}
+            <button data-thread="${m.id}" title="스레드로 답글">💬</button>
             ${m.user_id === Store.me.id || Store.me.role === 'admin' ? `<button data-del="${m.id}" title="삭제">🗑</button>` : ''}
           </div>`}
         </div>`;
     }).join('');
+
+    if (S.more) {
+      stream.insertAdjacentHTML('afterbegin',
+        `<div style="text-align:center;padding:6px"><button class="btn btn-sm btn-ghost" id="olderBtn">이전 메시지 더 보기</button></div>`);
+      stream.querySelector('#olderBtn').onclick = (e) => { e.target.textContent = '불러오는 중…'; loadOlder(); };
+    }
 
     stream.scrollTop = toBottom ? stream.scrollHeight : keep;
     S.atBottom = toBottom || S.atBottom;
@@ -630,18 +716,45 @@ const App = (() => {
     stream.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
       if (!(await confirmDialog('이 메시지를 삭제할까요?'))) return;
       await Store.deleteMessage(S.messages.find((x) => x.id === b.dataset.del));
-      S.messages = await Store.messages(S.target); paintStream(false); toast('삭제했습니다.');
+      await loadMessages(); paintStream(false); toast('삭제했습니다.');
     });
     stream.querySelectorAll('[data-vote]').forEach((b) => b.onclick = async () => {
       const m = S.messages.find((x) => x.id === b.dataset.vote);
       await Store.vote(m, b.dataset.opt); paintStream(false);
     });
+    stream.querySelectorAll('[data-thread]').forEach((b) => b.onclick = () => openThread(b.dataset.thread));
+    stream.querySelectorAll('[data-readers]').forEach((b) => b.onclick = () =>
+      showReaders(S.messages.find((x) => x.id === b.dataset.readers)));
     stream.querySelectorAll('[data-openfile]').forEach((b) => b.onclick = async () => {
       if (S.target.kind !== 'channel') return toast('다이렉트 메시지의 파일은 아직 편집기로 열 수 없습니다.');
       const f = (await Store.files(S.target.id)).find((x) => x.name === b.dataset.openfile);
       if (!f) return toast('채널 보관함에서 찾지 못했습니다.');
       Docs.open(f);
     });
+  }
+
+  /** 내 메시지 아래에 붙는 읽음 표시 */
+  function readReceipt(m) {
+    if (m.user_id !== Store.me.id || m.pending) return '';
+    const readers = S.reads.filter((r) => r.user_id !== Store.me.id && r.read_at >= m.created_at);
+    const others = channelMembers(ctx()).filter((p) => p.id !== Store.me.id).length;
+    if (S.target.kind === 'dm') {
+      return `<div class="receipt ${readers.length ? 'seen' : ''}">${readers.length ? '읽음' : '전송됨'}</div>`;
+    }
+    if (!readers.length) return `<div class="receipt">아직 아무도 안 읽음</div>`;
+    return `<button class="receipt seen" data-readers="${m.id}">읽음 ${readers.length}/${others}</button>`;
+  }
+
+  function showReaders(m) {
+    const readers = S.reads.filter((r) => r.user_id !== Store.me.id && r.read_at >= m.created_at);
+    const ids = new Set(readers.map((r) => r.user_id));
+    const all = channelMembers(ctx()).filter((p) => p.id !== Store.me.id);
+    modal({ title: '읽음', submit: '닫기', html: `
+      <div class="side-label" style="padding-left:0">읽음 ${ids.size}</div>
+      ${all.filter((p) => ids.has(p.id)).map((p) => `<div class="ver-row">${avatar(p)}<span>${esc(p.full_name)}</span>
+        <span class="file-meta" style="margin-left:auto">${timeOf(readers.find((r) => r.user_id === p.id).read_at)}</span></div>`).join('') || '<p class="file-meta">없음</p>'}
+      <div class="side-label" style="padding-left:0">안 읽음 ${all.length - ids.size}</div>
+      ${all.filter((p) => !ids.has(p.id)).map((p) => `<div class="ver-row">${avatar(p)}<span>${esc(p.full_name)}</span></div>`).join('') || '<p class="file-meta">없음</p>'}` });
   }
 
   function paintJump() {
@@ -925,6 +1038,7 @@ const App = (() => {
   async function renderPanel() {
     const panel = root.querySelector('#panel');
     if (!panel) return;
+    if (S.thread) return renderThread();
     const t = ctx();
     if (t.kind === 'dm') {
       const p = t.profile;
@@ -963,7 +1077,78 @@ const App = (() => {
         toast('멤버를 추가했습니다.'); renderPanel(); paintMain();
       });
     }
-    panel.querySelector('[data-close]').onclick = togglePanel;
+    panel.querySelector('[data-close]').onclick = () => togglePanel(false);
+  }
+
+  /* ================= 스레드 ================= */
+  async function renderThread() {
+    const panel = root.querySelector('#panel');
+    if (!panel || !S.thread) return;
+    const id = S.thread;
+    const parent = S.messages.find((m) => m.id === id) || await Store.message(id);
+    if (!parent) { S.thread = null; return renderPanel(); }
+    const replies = await Store.thread(id);
+    if (S.thread !== id) return;
+
+    const meName = Store.me.full_name;
+    const line = (m, root_ = false) => {
+      const p = Store.profile(m.user_id);
+      return `<div class="msg ${root_ ? 'thread-root' : ''} ${m.pending ? 'pending' : ''}" data-tmsg="${m.id}">
+        ${avatar(p)}
+        <div class="msg-body">
+          <div class="msg-head"><span class="msg-name">${esc(p.full_name)}</span>
+            <span class="msg-time">${timeOf(m.created_at)}</span></div>
+          <div class="msg-text">${format(m.body, meName)}${m.edited_at ? '<span class="msg-edited">(수정됨)</span>' : ''}</div>
+          ${Object.entries(m.reactions || {}).length ? `<div class="reactions">${Object.entries(m.reactions).map(([e, u]) =>
+            `<button class="reaction ${u.includes(Store.me.id) ? 'mine' : ''}" data-treact="${m.id}" data-emoji="${e}">${e} ${u.length}</button>`).join('')}</div>` : ''}
+        </div></div>`;
+    };
+
+    panel.innerHTML = `
+      <div class="panel-head">
+        <h3>스레드</h3>
+        <button class="btn-quiet" data-close aria-label="닫기">✕</button>
+      </div>
+      <div class="panel-body" id="tbody" style="padding-bottom:4px">
+        ${line(parent, true)}
+        <div class="thread-count">답글 ${replies.length}개</div>
+        ${replies.map((m) => line(m)).join('')}
+      </div>
+      <div class="composer" style="padding:8px 12px 12px">
+        <div class="composer-box">
+          <textarea id="tinput" rows="1" placeholder="스레드에 답글 쓰기" aria-label="답글 입력"></textarea>
+          <div class="composer-bar">
+            <label class="hint" style="display:flex;align-items:center;gap:5px;cursor:pointer">
+              <input type="checkbox" id="alsoSend" style="width:auto" /> 채널에도 보내기</label>
+            <button class="btn btn-sm composer-send" id="treply">답글</button>
+          </div>
+        </div>
+      </div>`;
+
+    const body = panel.querySelector('#tbody');
+    body.scrollTop = body.scrollHeight;
+    const input = panel.querySelector('#tinput');
+    if (!isMobile()) input.focus();
+    input.oninput = () => autosize(input);
+    input.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); reply(); } };
+    panel.querySelector('#treply').onclick = reply;
+    panel.querySelector('[data-close]').onclick = () => { S.thread = null; togglePanel(false); };
+    panel.querySelectorAll('[data-treact]').forEach((b) => b.onclick = async () => {
+      const m = replies.find((x) => x.id === b.dataset.treact) || parent;
+      await Store.react(m, b.dataset.emoji); renderThread();
+    });
+
+    async function reply() {
+      const body_ = input.value.trim(); if (!body_) return;
+      const also = panel.querySelector('#alsoSend').checked;
+      input.value = ''; autosize(input);
+      try {
+        await Store.send(S.target, { body: body_, parent_id: id });
+        if (also) await Store.send(S.target, { body: body_ });
+        await loadMessages(); paintStream(S.atBottom);
+        await renderThread();
+      } catch (err) { toast('답글을 보내지 못했습니다: ' + err.message); }
+    }
   }
 
   /* ================= 관리자 ================= */
@@ -1138,6 +1323,7 @@ const App = (() => {
       const acts = [
         { t: '어두운 화면 전환', k: '⌘⇧L', run: toggleTheme },
         { t: '전체 검색 열기', k: '', run: () => { S.query = q; go('search'); } },
+        { t: '알림 설정', k: '', run: pushSettings },
         { t: '단축키 보기', k: '?', run: showShortcuts },
         ...(Store.me.role === 'admin' ? [{ t: '팀 만들기', k: '', run: newTeam }, { t: '관리자 모드', k: '', run: () => go('admin') }] : []),
       ];
@@ -1241,7 +1427,7 @@ const App = (() => {
     if (opts.length < 2) return toast('보기를 두 개 이상 적어주세요.');
     const votes = {}; opts.forEach((o) => (votes[o] = []));
     await Store.send(S.target, { body: `설문을 올렸습니다: ${r.question}`, poll: { question: r.question, options: opts, votes } });
-    S.messages = await Store.messages(S.target); paintStream(true);
+    await loadMessages(); paintStream(true);
   }
 
   async function showMeMenu() {
@@ -1256,6 +1442,7 @@ const App = (() => {
           <span class="badge ${p.role === 'admin' ? 'admin' : ''}">${p.role === 'admin' ? '관리자' : '구성원'}</span>
           <span class="badge ok">접속 중</span></div>
         <div style="margin-top:16px;display:flex;gap:6px;justify-content:center">
+          <button class="btn btn-sm btn-ghost" onclick="App.push()">알림 설정</button>
           <button class="btn btn-sm btn-ghost" onclick="App.theme()">밝기 전환</button>
           <button class="btn btn-sm btn-ghost" onclick="App.shortcuts()">단축키</button></div>
       </div>` });
@@ -1273,6 +1460,23 @@ const App = (() => {
   window.addEventListener('resize', layout);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshUnread(); if (S.atBottom) markRead(); } });
 
+  /* ================= 알림 클릭 → 해당 대화로 ================= */
+  function handleDeepLink(params) {
+    const th = params.get('thread');
+    if (th) setTimeout(() => openThread(th), 300);
+    if (params.get('go') || th) history.replaceState({}, '', location.pathname);
+  }
+
+  navigator.serviceWorker?.addEventListener('message', (e) => {
+    if (e.data?.type !== 'navigate' || !e.data.url) return;
+    const params = new URL(e.data.url, location.origin).searchParams;
+    const id = params.get('go');
+    if (!id) return;
+    const t = Store.cache.channels.some((c) => c.id === id) ? { kind: 'channel', id }
+      : Store.cache.dms.some((d) => d.id === id) ? { kind: 'dm', id } : null;
+    if (t) { S.view = 'chat'; open(t).then(() => handleDeepLink(params)); }
+  });
+
   /* ================= 부팅 ================= */
   async function boot() {
     root.className = 'app-loading';
@@ -1286,15 +1490,24 @@ const App = (() => {
       mount();
       paintSidebar();
 
+      const params = new URL(location.href).searchParams;
       const first = Store.myTeams()[0];
       const chans = first ? Store.visibleChannels(first.id) : [];
-      if (chans[0]) await open({ kind: 'channel', id: chans[0].id });
+      const wanted = params.get('go');
+      const target = wanted
+        ? (Store.cache.channels.some((c) => c.id === wanted) ? { kind: 'channel', id: wanted }
+          : Store.cache.dms.some((d) => d.id === wanted) ? { kind: 'dm', id: wanted } : null)
+        : null;
+      if (target) await open(target);
+      else if (chans[0]) await open({ kind: 'channel', id: chans[0].id });
       else paintMain();
 
       Store.joinPresence((set) => { S.online = set; paintSidebar(); if (S.panel) renderPanel(); });
       refreshUnread();
       setInterval(refreshUnread, 30000);
+      Push.resume();
       askNotify();
+      handleDeepLink(new URL(location.href).searchParams);
     } catch (err) {
       renderAuth('signin', { kind: 'err', text: err.message });
     }
@@ -1305,5 +1518,5 @@ const App = (() => {
   }
   boot();
 
-  return { boot, palette: openPalette, theme: toggleTheme, shortcuts: showShortcuts };
+  return { boot, palette: openPalette, theme: toggleTheme, shortcuts: showShortcuts, push: pushSettings };
 })();

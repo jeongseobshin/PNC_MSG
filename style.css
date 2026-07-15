@@ -644,3 +644,35 @@ mark { background: var(--mark); color: inherit; padding: 0 2px; border-radius: 2
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+/* ==========================================================================
+   스레드 · 읽음 표시
+   ========================================================================== */
+.thread-link {
+  display: flex; align-items: center; gap: 8px; margin-top: 5px; padding: 3px 8px;
+  border-radius: var(--r-sm); font-size: var(--t-cap); font-weight: 700; color: var(--brand);
+  border: 1px solid transparent; transition: border-color .12s, background .12s;
+}
+.thread-link:hover { border-color: var(--line); background: var(--surface); }
+.thread-open { color: var(--text-3); font-weight: 400; opacity: 0; transition: opacity .12s; }
+.thread-link:hover .thread-open { opacity: 1; }
+
+.msg.thread-root {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 10px; margin-bottom: 10px;
+}
+.msg.thread-root:hover { background: var(--surface); }
+.thread-count {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-3); display: flex; align-items: center; gap: 10px; margin: 4px 0 8px;
+}
+.thread-count::after { content: ""; height: 1px; background: var(--line); flex: 1; }
+#tbody .msg { padding: 4px 2px; }
+
+.receipt {
+  display: block; margin-top: 3px; font-size: 10px; font-family: var(--mono);
+  color: var(--text-3); text-align: right;
+}
+button.receipt { text-align: right; margin-left: auto; }
+.receipt.seen { color: var(--presence); font-weight: 700; }
+button.receipt.seen:hover { text-decoration: underline; }
