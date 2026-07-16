@@ -9,6 +9,10 @@ window.TEAMHUB_CONFIG = {
    SUPABASE_URL: "https://nqxhwxutdfltvuefszdi.supabase.co",       // 예: "https://abcdefgh.supabase.co"
    SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5xeGh3eHV0ZGZsdHZ1ZWZzemRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxNDM5MDEsImV4cCI6MjA5OTcxOTkwMX0.bacCxxumMqQ8zM9IOkH0Ik-tAn2cHPYDZNA4HpMX97U",  // 예: "eyJhbGciOi..."
 
+   GOOGLE_CLIENT_ID: "915503141866-9pgo7tj1n2nc7c6hmpmqai3tmbdkilvi.apps.googleusercontent.com",
+   GOOGLE_HOSTED_DOMAIN: "company.co.kr",   // Google Workspace 도메인. 없으면 빈 문자열
+   DOC_PROVIDER: "google",                  // ONLYOFFICE도 같이 두고 싶으면 비워서 자동 감지에 맡겨도 됩니다
+};
   // 웹 푸시 공개키(VAPID). `npm run vapid`로 만든 publicKey를 넣습니다.
   // 공개키라 노출돼도 안전합니다. privateKey는 Netlify 환경변수에만 둡니다.
   VAPID_PUBLIC_KEY: "",
