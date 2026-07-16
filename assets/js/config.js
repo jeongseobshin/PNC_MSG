@@ -6,8 +6,8 @@
    ========================================================================== */
 
 window.TEAMHUB_CONFIG = {
-  SUPABASE_URL: "",       // 예: "https://abcdefgh.supabase.co"
-  SUPABASE_ANON_KEY: "",  // 예: "eyJhbGciOi..."
+   SUPABASE_URL: "https://nqxhwxutdfltvuefszdi.supabase.co",       // 예: "https://abcdefgh.supabase.co"
+   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5xeGh3eHV0ZGZsdHZ1ZWZzemRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQxNDM5MDEsImV4cCI6MjA5OTcxOTkwMX0.bacCxxumMqQ8zM9IOkH0Ik-tAn2cHPYDZNA4HpMX97U",  // 예: "eyJhbGciOi..."
 
   // 웹 푸시 공개키(VAPID). `npm run vapid`로 만든 publicKey를 넣습니다.
   // 공개키라 노출돼도 안전합니다. privateKey는 Netlify 환경변수에만 둡니다.
