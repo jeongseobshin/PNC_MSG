@@ -340,7 +340,11 @@ const Store = (() => {
         row = data;
       }
       const version = row.version + 1;
-      const path = `${channelId}/${row.id}/v${version}_${file.name}`;
+      // 저장 경로에는 원본 파일명을 쓰지 않습니다. 한글·공백·괄호 등은
+      // Supabase Storage의 key 규칙에서 막혀 "Invalid key" 에러가 납니다.
+      // 화면에 보여줄 이름은 files.name 컬럼에 그대로 남아 있으니 문제 없습니다.
+      const ext = (file.name.split('.').pop() || 'bin').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) || 'bin';
+      const path = `${channelId}/${row.id}/v${version}.${ext}`;
       const { error: upErr } = await sb.storage.from('files').upload(path, file, { upsert: true });
       if (upErr) throw upErr;
 
