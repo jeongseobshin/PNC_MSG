@@ -1,8 +1,21 @@
 /* ==========================================================================
-   Docs — ONLYOFFICE 에디터 열기
-   문서 서버 스크립트를 불러와 전체화면 오버레이 안에 에디터를 띄웁니다.
-   설정과 서명은 서버(/api/docs-token)가 만들고, 여기서는 표시만 합니다.
+   Docs — 문서 편집기 라우터
+   ---------------------------------------------------------------------------
+   두 가지 문서 편집 방식을 같은 인터페이스(open/create)로 감쌉니다.
+
+   - 'onlyoffice' : 이 파일 안의 기존 코드. 별도 문서 서버(VM, 월 비용)가 필요.
+   - 'google'     : gdocs.js에 위임. 구글 계정 연동만 하면 서버가 필요 없는
+                    완전 무료 대안(대신 파일이 구글 드라이브에 저장됩니다).
+
+   config.js의 DOC_PROVIDER로 고정하거나, 비워두면 GOOGLE_CLIENT_ID가 있을 때
+   자동으로 'google'을 씁니다. 이미 만들어진 파일을 열 때는 files.provider
+   컬럼을 우선으로 봐서, 두 방식을 섞어 쓴 이력이 있어도 각자 맞는 곳으로 엽니다.
    ========================================================================== */
+
+function docProvider() {
+  const cfg = window.TEAMHUB_CONFIG || {};
+  return cfg.DOC_PROVIDER || (cfg.GOOGLE_CLIENT_ID ? 'google' : 'onlyoffice');
+}
 
 const Docs = (() => {
   let apiLoaded = null;
@@ -21,6 +34,7 @@ const Docs = (() => {
 
   /** 파일 하나를 편집 창으로 엽니다. onClosed는 닫힐 때 호출됩니다. */
   async function open(file, onClosed) {
+    if (file.provider === 'google') return GDocs.open(file, onClosed);
     if (Store.mode === 'demo') {
       UI.toast('데모 모드에서는 문서 편집기를 열 수 없습니다. Supabase와 문서 서버 연결이 필요합니다.');
       return;
@@ -73,6 +87,7 @@ const Docs = (() => {
 
   /** 빈 Word/Excel/PowerPoint 문서를 만들어 채널에 올립니다. */
   async function create(channelId, kind, name) {
+    if (docProvider() === 'google') return GDocs.create(channelId, kind, name);
     const ext = { word: 'docx', cell: 'xlsx', slide: 'pptx' }[kind];
     const blank = await (await fetch(`assets/templates/blank.${ext}`)).blob();
     const fileName = name.endsWith('.' + ext) ? name : `${name}.${ext}`;

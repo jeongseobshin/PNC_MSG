@@ -875,6 +875,7 @@ const App = (() => {
                 <td class="mono" style="color:var(--text-3)">${new Date(f.updated_at || f.created_at).toLocaleDateString('ko-KR')}</td>
                 <td style="white-space:nowrap">
                   ${OFFICE.has(ext) ? `<button class="btn btn-sm" data-open="${f.id}">편집</button>` : ''}
+                  ${f.provider === 'google' ? `<button class="btn btn-sm btn-ghost" data-resync="${f.id}" title="새로 합류한 사람에게 편집 권한을 다시 나눠줍니다">권한 나누기</button>` : ''}
                   <button class="btn btn-sm btn-ghost" data-dl="${f.id}">내려받기</button></td>
               </tr>`;
             }).join('')}</tbody></table>`
@@ -906,8 +907,17 @@ const App = (() => {
     pane.querySelectorAll('[data-open]').forEach((b) => b.onclick = () =>
       Docs.open(rows.find((x) => x.id === b.dataset.open), () => renderFiles(pane)));
     pane.querySelectorAll('[data-dl]').forEach((b) => b.onclick = async () => {
-      const url = await Store.fileUrl(rows.find((x) => x.id === b.dataset.dl));
+      const f = rows.find((x) => x.id === b.dataset.dl);
+      if (f.provider === 'google') { window.open(GDocs.exportUrl(f), '_blank', 'noopener'); return; }
+      const url = await Store.fileUrl(f);
       url ? window.open(url, '_blank') : toast('데모 모드에서는 실제 파일을 내려받을 수 없습니다.');
+    });
+    pane.querySelectorAll('[data-resync]').forEach((b) => b.onclick = async () => {
+      try {
+        const f = rows.find((x) => x.id === b.dataset.resync);
+        const r = await GDocs.resync(f);
+        toast(r.total ? `${r.shared}/${r.total}명에게 권한을 나눠줬습니다.` : '이미 구글 계정을 연동한 채널 멤버가 없습니다.');
+      } catch (err) { toast('권한을 나누지 못했습니다: ' + err.message); }
     });
     pane.querySelectorAll('[data-ver]').forEach((b) => b.onclick = async () => {
       const f = rows.find((x) => x.id === b.dataset.ver);
@@ -1432,6 +1442,7 @@ const App = (() => {
 
   async function showMeMenu() {
     const p = Store.me;
+    const gEnabled = GAuth.enabled();
     const r = await modal({ title: '내 프로필', submit: '로그아웃', html: `
       <div style="text-align:center">
         ${avatar({ ...p, presence: 'online' }, 'xl')}
@@ -1441,12 +1452,34 @@ const App = (() => {
         <div style="margin-top:12px;display:flex;gap:6px;justify-content:center">
           <span class="badge ${p.role === 'admin' ? 'admin' : ''}">${p.role === 'admin' ? '관리자' : '구성원'}</span>
           <span class="badge ok">접속 중</span></div>
+        ${gEnabled ? `
+        <div class="card" style="margin-top:16px;padding:10px;text-align:left">
+          <b style="font-size:13px">문서 편집용 구글 계정</b>
+          <div class="file-meta" style="margin-top:2px">
+            ${p.google_email ? `연동됨: ${esc(p.google_email)}` : '아직 연동되지 않았습니다. Word·Excel·PPT를 열려면 연동이 필요합니다.'}</div>
+          <div style="margin-top:8px;display:flex;gap:6px">
+            <button class="btn btn-sm" onclick="App.gconnect()">${p.google_email ? '다시 연동' : '구글 계정 연동'}</button>
+            ${p.google_email ? `<button class="btn btn-sm btn-ghost" onclick="App.gunlink()">연동 해제</button>` : ''}
+          </div>
+        </div>` : ''}
         <div style="margin-top:16px;display:flex;gap:6px;justify-content:center">
           <button class="btn btn-sm btn-ghost" onclick="App.push()">알림 설정</button>
           <button class="btn btn-sm btn-ghost" onclick="App.theme()">밝기 전환</button>
           <button class="btn btn-sm btn-ghost" onclick="App.shortcuts()">단축키</button></div>
       </div>` });
     if (r !== null) { await Store.signOut(); renderAuth('signin', { kind: 'ok', text: '로그아웃했습니다.' }); }
+  }
+
+  async function connectGoogle() {
+    try { const email = await GAuth.connect(); toast(`구글 계정을 연동했습니다: ${email}`); }
+    catch (err) { toast('연동하지 못했습니다: ' + err.message); }
+    finally { showMeMenu(); }
+  }
+
+  async function unlinkGoogle() {
+    try { await GAuth.unlink(); toast('구글 계정 연동을 해제했습니다.'); }
+    catch (err) { toast('해제하지 못했습니다: ' + err.message); }
+    finally { showMeMenu(); }
   }
 
   /* ================= 전역 단축키 ================= */
@@ -1518,5 +1551,8 @@ const App = (() => {
   }
   boot();
 
-  return { boot, palette: openPalette, theme: toggleTheme, shortcuts: showShortcuts, push: pushSettings };
+  return {
+    boot, palette: openPalette, theme: toggleTheme, shortcuts: showShortcuts, push: pushSettings,
+    gconnect: connectGoogle, gunlink: unlinkGoogle,
+  };
 })();
