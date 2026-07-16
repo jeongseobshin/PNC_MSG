@@ -40,7 +40,7 @@ window.TEAMHUB_CONFIG = {
   // 회사가 Google Workspace를 쓴다면 그 도메인(예: "company.co.kr")을 적어주세요.
   // 연동 시 그 도메인 계정으로 로그인하도록 안내만 할 뿐, 실제 접근 차단은
   // 각 구글 문서의 공유 설정이 담당합니다. 비워두면 개인 Gmail도 연동됩니다.
-  GOOGLE_HOSTED_DOMAIN: "",
+  GOOGLE_HOSTED_DOMAIN: "pnclabs.co.kr",
 
   // 'google' → Word/Excel/PPT 버튼이 구글 문서를 만듭니다.
   // 'onlyoffice' → 기존 ONLYOFFICE 문서 서버(VM 필요)를 씁니다.
