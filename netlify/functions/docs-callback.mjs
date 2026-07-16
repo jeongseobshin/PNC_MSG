@@ -61,9 +61,11 @@ export default async (req) => {
     if (!docRes.ok) return fail('편집 결과를 내려받지 못했습니다.');
     const bytes = Buffer.from(await docRes.arrayBuffer());
 
-    // 5. 새 버전으로 업로드 (이전 버전 파일은 그대로 남겨 이력이 됩니다)
+    // 저장 경로에는 원본 파일명을 쓰지 않습니다. 한글·공백·괄호 등은
+    // Supabase Storage의 key 규칙에서 막혀 "Invalid key" 에러가 납니다.
     const version = file.version + 1;
-    const path = `${file.channel_id}/${file.id}/v${version}_${file.name}`;
+    const ext = (file.name.split('.').pop() || 'bin').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) || 'bin';
+    const path = `${file.channel_id}/${file.id}/v${version}.${ext}`;
     const up = await fetch(`${SUPABASE_URL}/storage/v1/object/files/${path}`, {
       method: 'POST',
       headers: { ...admin, 'content-type': 'application/octet-stream', 'x-upsert': 'true' },
