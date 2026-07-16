@@ -1,0 +1,27 @@
+# ===========================================================================
+# ONLYOFFICE Docs Community Edition — 문서 서버
+# Netlify는 정적 파일만 올리므로 이 서버는 별도 호스트(VM)에 띄웁니다.
+#
+#   1) .env 파일에 JWT_SECRET 을 넣습니다 (Netlify 환경변수와 같은 값)
+#   2) docker compose up -d
+#   3) 앞단에 Caddy/Nginx로 HTTPS를 붙입니다. 문서 서버는 반드시 HTTPS여야
+#      브라우저가 섞인 콘텐츠로 막지 않습니다.
+#
+# 9.4부터 동시 접속 20개 제한이 없어졌고 RabbitMQ·별도 DB도 필요 없습니다.
+# ===========================================================================
+services:
+  documentserver:
+    image: onlyoffice/documentserver:latest   # 9.4 이상
+    container_name: teamhub-docs
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      - JWT_ENABLED=true
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_HEADER=Authorization
+      - JWT_IN_BODY=true
+    volumes:
+      - ./ds/data:/var/www/onlyoffice/Data
+      - ./ds/logs:/var/log/onlyoffice
+      - ./ds/cache:/var/lib/onlyoffice/documentserver/App_Data/cache/files
