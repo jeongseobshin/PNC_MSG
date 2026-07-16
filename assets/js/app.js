@@ -876,7 +876,8 @@ const App = (() => {
                 <td style="white-space:nowrap">
                   ${OFFICE.has(ext) ? `<button class="btn btn-sm" data-open="${f.id}">편집</button>` : ''}
                   ${f.provider === 'google' ? `<button class="btn btn-sm btn-ghost" data-resync="${f.id}" title="새로 합류한 사람에게 편집 권한을 다시 나눠줍니다">권한 나누기</button>` : ''}
-                  <button class="btn btn-sm btn-ghost" data-dl="${f.id}">내려받기</button></td>
+                  <button class="btn btn-sm btn-ghost" data-dl="${f.id}">내려받기</button>
+                  ${(Store.me.role === 'admin' || f.user_id === Store.me.id) ? `<button class="btn btn-sm btn-ghost" data-del="${f.id}" title="삭제">삭제</button>` : ''}</td>
               </tr>`;
             }).join('')}</tbody></table>`
           : `<div class="empty"><b>아직 문서가 없습니다</b>
@@ -918,6 +919,19 @@ const App = (() => {
         const r = await GDocs.resync(f);
         toast(r.total ? `${r.shared}/${r.total}명에게 권한을 나눠줬습니다.` : '이미 구글 계정을 연동한 채널 멤버가 없습니다.');
       } catch (err) { toast('권한을 나누지 못했습니다: ' + err.message); }
+    });
+    pane.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+      const f = rows.find((x) => x.id === b.dataset.del);
+      const r = await modal({ title: '문서를 삭제할까요?', submit: '삭제', html: `
+        <p style="margin:0">"${esc(f.name)}"을(를) 지웁니다. 버전 이력도 함께 사라지고 되돌릴 수 없습니다.</p>
+        ${f.provider === 'google' ? '<p class="file-meta" style="margin-top:8px">구글 드라이브 원본도 휴지통으로 보내봅니다(권한이 있을 때만 됩니다). TeamHub 쪽 기록은 항상 지워집니다.</p>' : ''}` });
+      if (r === null) return;
+      try {
+        if (f.provider === 'google') await GDocs.trash(f).catch(() => {});
+        await Store.deleteFile(f);
+        toast(`${f.name}을(를) 지웠습니다.`);
+        renderFiles(pane);
+      } catch (err) { toast('지우지 못했습니다: ' + err.message); }
     });
     pane.querySelectorAll('[data-ver]').forEach((b) => b.onclick = async () => {
       const f = rows.find((x) => x.id === b.dataset.ver);

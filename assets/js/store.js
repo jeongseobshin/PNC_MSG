@@ -379,6 +379,23 @@ const Store = (() => {
       return data?.signedUrl || null;
     },
 
+    /* 파일 삭제: 관리자 또는 올린 사람만(화면 쪽에서도 막지만 RLS가 진짜 방어선). 버전 이력과
+       Storage에 쌓인 실제 파일 데이터까지 함께 지웁니다. 구글 문서는 참조만 지우고(Drive 쪽
+       실제 삭제는 gdocs.js가 시도), 실패해도 화면에서는 없어집니다. */
+    async deleteFile(file) {
+      if (!useSupabase) {
+        const i = demo.files.findIndex((f) => f.id === file.id);
+        if (i > -1) demo.files.splice(i, 1);
+        return;
+      }
+      const { data: versions } = await sb.from('file_versions').select('path').eq('file_id', file.id);
+      const paths = (versions || []).map((v) => v.path).filter(Boolean);
+      if (file.path) paths.push(file.path);
+      if (paths.length) await sb.storage.from('files').remove([...new Set(paths)]);
+      const { error } = await sb.from('files').delete().eq('id', file.id);
+      if (error) throw error;
+    },
+
     /* ---- 작업(Planner) ---- */
     async tasks(channelId) {
       if (!useSupabase) return demo.tasks.filter((t) => t.channel_id === channelId);

@@ -146,5 +146,18 @@ const GDocs = (() => {
     return shareWithChannel(file.channel_id, file.google_file_id, token);
   }
 
-  return { create, open, resync, editUrl, exportUrl, MIME, EXT };
+  /** 구글 드라이브의 실제 파일도 휴지통으로 보냅니다(최선 노력).
+      호출한 사람에게 그 파일 편집 권한이 없으면 조용히 실패하고, TeamHub 쪽
+      기록(참조)은 store.js의 deleteFile()이 어차피 지웁니다. */
+  async function trash(file) {
+    try {
+      const token = await GAuth.getToken();
+      await drive('PATCH', `files/${file.google_file_id}`, { token, body: { trashed: true } });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return { create, open, resync, trash, editUrl, exportUrl, MIME, EXT };
 })();
