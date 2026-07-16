@@ -449,3 +449,25 @@ end $$;
 
 -- ---------- 7-6. 파일 크기 상한 (50MB) ----------
 update storage.buckets set file_size_limit = 52428800 where id = 'files';
+
+-- ===========================================================================
+-- 8. 구글 문서 연동 (완전 무료 대안 — ONLYOFFICE VM 불필요)
+-- 이미 배포된 곳에도 안전하게 다시 실행할 수 있습니다(add column if not exists).
+-- ===========================================================================
+
+-- 8-1. 프로필에 "연동된 구글 계정 이메일"을 붙입니다.
+--      회사 로그인 계정(email)과는 별개입니다 — 회사 계정 그대로 쓰고,
+--      문서 편집만 구글 계정을 "연동"하는 방식입니다.
+alter table profiles add column if not exists google_email text;
+
+-- 8-2. files에 "어디에 저장된 문서인지" 구분 컬럼을 추가합니다.
+--      provider가 'google'이면 실제 내용은 Supabase Storage가 아니라
+--      구글 드라이브에 있고, google_file_id/google_url만 참조로 남습니다.
+alter table files add column if not exists provider text not null default 'storage';
+do $$ begin
+  alter table files add constraint files_provider_check check (provider in ('storage','google'));
+exception when duplicate_object then null; end $$;
+alter table files add column if not exists google_file_id text;
+alter table files add column if not exists google_url text;
+
+-- path는 원래도 not null이 아니었으므로 provider='google'인 행은 비워둡니다.
