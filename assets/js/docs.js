@@ -35,6 +35,22 @@ const Docs = (() => {
   /** 파일 하나를 편집 창으로 엽니다. onClosed는 닫힐 때 호출됩니다. */
   async function open(file, onClosed) {
     if (file.provider === 'google') return GDocs.open(file, onClosed);
+
+    // 이 파일은 PC에서 올린 것(Storage에만 있음)인데, 문서 편집 방식이 구글이면
+    // ONLYOFFICE 서버는 애초에 없다는 뜻입니다. 처음 열 때 구글 문서로 한 번
+    // 변환해서 그 뒤로는 새로 만든 문서와 똑같이 편집되게 합니다.
+    if (docProvider() === 'google') {
+      try {
+        UI.toast('구글 문서로 변환하는 중…');
+        const updated = await GDocs.importFromStorage(file);
+        return GDocs.open(updated, onClosed);
+      } catch (err) {
+        UI.toast('편집기를 열지 못했습니다: ' + err.message);
+        onClosed?.();
+        return;
+      }
+    }
+
     if (Store.mode === 'demo') {
       UI.toast('데모 모드에서는 문서 편집기를 열 수 없습니다. Supabase와 문서 서버 연결이 필요합니다.');
       return;

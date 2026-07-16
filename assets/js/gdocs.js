@@ -129,6 +129,55 @@ const GDocs = (() => {
     return data;
   }
 
+  /** PC에서 올린(Storage에 있는) Word/Excel/PPT 파일을 구글 문서로 "가져와" 편집 가능하게 만듭니다.
+      원본 내용을 그대로 구글 형식으로 변환한 새 구글 파일을 만들고, files 행을 그 파일을
+      가리키도록 갱신합니다(provider: storage → google). 그 다음부터는 새로 만든 문서와
+      똑같이 새 탭에서 바로 열립니다. */
+  async function importFromStorage(file) {
+    if (!GAuth.enabled()) throw new Error('구글 연동이 설정되어 있지 않습니다(config.js의 GOOGLE_CLIENT_ID).');
+    if (!GAuth.email) throw new Error('먼저 프로필에서 구글 계정을 연동해주세요.');
+
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const mimeType = { docx: MIME.word, xlsx: MIME.cell, pptx: MIME.slide }[ext];
+    if (!mimeType) throw new Error('Word(.docx)·Excel(.xlsx)·PowerPoint(.pptx) 파일만 구글 문서로 열 수 있습니다.');
+
+    const url = await Store.fileUrl(file);
+    if (!url) throw new Error('원본 파일을 불러오지 못했습니다.');
+    const blob = await (await fetch(url)).blob();
+
+    const token = await GAuth.getToken();
+    const boundary = 'teamhub-' + Math.random().toString(36).slice(2);
+    const metaPart =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify({ name: file.name, mimeType })}\r\n--${boundary}\r\n` +
+      `Content-Type: ${blob.type || 'application/octet-stream'}\r\n\r\n`;
+    const multipartBody = new Blob([metaPart, blob, `\r\n--${boundary}--`]);
+
+    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+      body: multipartBody,
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error?.message || '구글 문서로 바꾸지 못했습니다.');
+    }
+    const created = await res.json();
+    await shareWithChannel(file.channel_id, created.id, token);
+
+    const update = {
+      provider: 'google',
+      google_file_id: created.id,
+      google_url: `https://docs.google.com/${PATH[mimeType]}/d/${created.id}/edit`,
+      updated_by: Store.me.id,
+      updated_at: new Date().toISOString(),
+    };
+    if (Store.mode !== 'supabase') return { ...file, ...update };
+    const { data, error } = await Store.sb.from('files').update(update).eq('id', file.id).select().single();
+    if (error) throw error;
+    return data;
+  }
+
   /** 새 탭에서 구글 편집 화면을 엽니다. */
   async function open(file, onClosed) {
     if (!GAuth.email) {
@@ -159,5 +208,5 @@ const GDocs = (() => {
     }
   }
 
-  return { create, open, resync, trash, editUrl, exportUrl, MIME, EXT };
+  return { create, open, resync, trash, importFromStorage, editUrl, exportUrl, MIME, EXT };
 })();
